@@ -1,0 +1,4 @@
+package: github.com/samuelngs/kubernetes-bot
+import:
+- package: k8s.io/kubernetes
+  version: ~1.4.0-alpha.2

@@ -1,0 +1,6 @@
+hash: c47b892084b412aa1d306192aa56ccb6416d8313bc05bc0b9ca7acfc484a0bcc
+updated: 2016-08-07T16:35:08.983797928-06:00
+imports:
+- name: k8s.io/kubernetes
+  version: 9fab05fe59fb4e02deb0f839ae2ae79954bbda4c
+testImports: []
