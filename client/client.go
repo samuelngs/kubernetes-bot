@@ -7,11 +7,9 @@ import (
 	"syscall"
 
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/client/cache"
 	"k8s.io/kubernetes/pkg/client/unversioned"
-	"k8s.io/kubernetes/pkg/controller/framework"
-	"k8s.io/kubernetes/pkg/fields"
-	"k8s.io/kubernetes/pkg/util/wait"
+	"k8s.io/kubernetes/pkg/labels"
+	"k8s.io/kubernetes/pkg/watch"
 )
 
 // Client interface
@@ -20,44 +18,6 @@ type Client interface {
 	Stop() error
 	Options() *Options
 	Watch() <-chan Event
-}
-
-// resource types
-type resource int8
-
-// list of resources types
-const (
-	nodes resource = iota
-	pods
-)
-
-func (v resource) name() string {
-	switch v {
-	case nodes:
-		return "nodes"
-	case pods:
-		return "pods"
-	default:
-		return "unknown"
-	}
-}
-
-// resource kind
-type kind struct {
-	resource  resource
-	namespace string
-}
-
-// list of resources kind
-var kinds = []kind{
-	kind{
-		resource:  nodes,
-		namespace: api.NamespaceAll,
-	},
-	kind{
-		resource:  pods,
-		namespace: api.NamespaceAll,
-	},
 }
 
 type client struct {
@@ -113,82 +73,54 @@ func (v *client) Stop() error {
 
 // monitor handler
 func (v *client) monitor() {
-	for _, kind := range kinds {
-		switch kind.resource {
-		case nodes:
-			handler := framework.ResourceEventHandlerFuncs{
-				AddFunc:    v.addNode,
-				DeleteFunc: v.delNode,
-				UpdateFunc: v.updateNode,
+	observe := v.client.Events(api.NamespaceAll)
+	options := api.ListOptions{
+		LabelSelector: labels.Everything(),
+	}
+	w, err := observe.Watch(options)
+	if err != nil {
+		log.Fatal(err)
+	}
+	for {
+		select {
+		case res, _ := <-w.ResultChan():
+			e, ok := res.Object.(*api.Event)
+			if !ok {
+				continue
 			}
-			_, controller := framework.NewInformer(
-				cache.NewListWatchFromClient(v.client, kind.resource.name(), kind.namespace, fields.Everything()),
-				new(api.Node),
-				v.option.Interval,
-				handler,
-			)
-			go controller.Run(wait.NeverStop)
-		case pods:
-			handler := framework.ResourceEventHandlerFuncs{
-				AddFunc:    v.addPod,
-				DeleteFunc: v.delPod,
-				UpdateFunc: v.updatePod,
+			var color string
+			switch {
+			case e.Count > 1:
+				continue
+			case e.Reason == "BackOff" && e.Count == 3:
+				color = "danger"
+			case res.Type == watch.Added:
+				color = "good"
+			case res.Type == watch.Deleted:
+				color = "warning"
+			case e.Reason == "SuccessfulCreate":
+				color = "good"
+			case e.Reason == "NodeReady":
+				color = "good"
+			case e.Reason == "NodeNotReady":
+				color = "danger"
+			case e.Reason == "NodeOutOfDisk":
+				color = "danger"
 			}
-			_, controller := framework.NewInformer(
-				cache.NewListWatchFromClient(v.client, kind.resource.name(), kind.namespace, fields.Everything()),
-				new(api.Pod),
-				v.option.Interval,
-				handler,
-			)
-			go controller.Run(wait.NeverStop)
+			switch e.Source.Component {
+			case "kubelet", "controllermanager", "default-scheduler":
+				continue
+			}
+			v.events <- &event{
+				level:        color,
+				name:         e.GetObjectMeta().GetName(),
+				namespace:    e.GetObjectMeta().GetNamespace(),
+				generatename: e.GetObjectMeta().GetGenerateName(),
+				reason:       e.Reason,
+				message:      e.Message,
+				kind:         e.InvolvedObject.Kind,
+				component:    e.Source.Component,
+			}
 		}
-	}
-}
-
-// addNode handler
-func (v *client) addNode(obj interface{}) {
-	v.events <- &event{
-		typ:  EventNewNode,
-		node: obj.(*api.Node),
-	}
-}
-
-// delNode handler
-func (v *client) delNode(obj interface{}) {
-	v.events <- &event{
-		typ:  EventDelNode,
-		node: obj.(*api.Node),
-	}
-}
-
-// updateNode handler
-func (v *client) updateNode(old, new interface{}) {
-	v.events <- &event{
-		typ:  EventUpdateNode,
-		node: new.(*api.Node),
-	}
-}
-
-// addPod handler
-func (v *client) addPod(obj interface{}) {
-	v.events <- &event{
-		typ: EventNewPod,
-		pod: obj.(*api.Pod),
-	}
-}
-
-// delPod handler
-func (v *client) delPod(obj interface{}) {
-	v.events <- &event{
-		typ: EventDelPod,
-		pod: obj.(*api.Pod),
-	}
-}
-
-// updatePod handler
-func (v *client) updatePod(old, new interface{}) {
-	v.events <- &event{
-		typ: EventUpdatePod,
-		pod: new.(*api.Pod),
 	}
 }

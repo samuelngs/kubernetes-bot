@@ -27,6 +27,7 @@ func (v *slacktable) Body() interface{} {
 		})
 	}
 	attachment.Color = v.color
+	params.Attachments = append(params.Attachments, attachment)
 	return params
 }
 
@@ -48,6 +49,8 @@ type slack struct {
 	client    *client.Client
 	websocket *client.RTM
 	receive   chan string
+	queue     []Message
+	connected bool
 }
 
 // Slack creates slack bot
@@ -58,24 +61,33 @@ func Slack(opts ...Option) (Bot, error) {
 	v.client = client.New(
 		v.option.Token,
 	)
+	v.queue = make([]Message, 0)
 	v.websocket = v.client.NewRTM()
+	go v.websocket.ManageConnection()
 	go v.listen()
 	return v, nil
 }
 
 // listen to events
 func (v *slack) listen() {
-	go v.websocket.ManageConnection()
 	for {
 		select {
 		case msg := <-v.websocket.IncomingEvents:
 			switch ev := msg.Data.(type) {
 			case *client.HelloEvent:
 			case *client.ConnectedEvent:
+				v.connected = true
 				if err := v.Emit(Text("Nap nap nap! I'm awake now ♥")); err != nil {
 					log.Print(err)
 				}
+				for _, m := range v.queue {
+					if err := v.Emit(m); err != nil {
+						log.Print(err)
+					}
+				}
+				v.queue = make([]Message, 0)
 			case *client.DisconnectedEvent:
+				v.connected = false
 				if err := v.Emit(Text("Sorry gonna went for nap ♥")); err != nil {
 					log.Print(err)
 				}
@@ -106,12 +118,17 @@ func (v *slack) Receive() <-chan string {
 
 // Emit to send message
 func (v *slack) Emit(m Message) error {
+	if !v.connected {
+		log.Print("slack connection is not established, message will be sent when connection is ready")
+		v.queue = append(v.queue, m)
+		return nil
+	}
 	bot := v.UserInfo()
 	switch o := m.Body().(type) {
 	case client.PostMessageParameters:
 		o.Username = bot.Name
 		o.IconURL = bot.Profile.ImageOriginal
-		if _, _, err := v.client.PostMessage(v.option.Channel, "", o); err != nil {
+		if _, _, err := v.client.PostMessage(v.option.Channel, o.Text, o); err != nil {
 			return err
 		}
 	case string:
