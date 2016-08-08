@@ -3,3 +3,5 @@ import:
 - package: k8s.io/kubernetes
   version: ~1.4.0-alpha.2
 - package: github.com/samuelngs/env-go
+- package: github.com/nlopes/slack
+  version: 4feee83bb2b31d790977ce727a028c6a542c72c7
